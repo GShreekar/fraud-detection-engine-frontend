@@ -1,0 +1,223 @@
+import type { Scenario, TransactionRequest } from '@/types'
+
+export const scenarios: Scenario[] = [
+  {
+    id: 'high-amount',
+    name: 'High Amount Transaction',
+    description: 'Large purchase of $1,500 from a US customer',
+    expectedDecision: 'REVIEW',
+    category: 'Amount',
+    payload: {
+      amount: 1500,
+      currency: 'USD',
+      country: 'US',
+      merchant_category: 'electronics',
+      payment_method: 'credit_card',
+      is_international: false,
+    },
+  },
+  {
+    id: 'high-risk-country',
+    name: 'High-Risk Country (NG)',
+    description: 'Transaction originating from Nigeria',
+    expectedDecision: 'REVIEW',
+    category: 'Geography',
+    payload: {
+      amount: 250,
+      currency: 'USD',
+      country: 'NG',
+      merchant_category: 'retail',
+      is_international: true,
+    },
+  },
+  {
+    id: 'round-amount',
+    name: 'Round Amount $5,000',
+    description: 'Suspiciously round large amount',
+    expectedDecision: 'BLOCK',
+    category: 'Amount',
+    payload: {
+      amount: 5000,
+      currency: 'USD',
+      country: 'US',
+      merchant_category: 'crypto_exchange',
+      payment_method: 'bank_transfer',
+    },
+  },
+  {
+    id: 'velocity-burst',
+    name: 'Velocity Burst (15 rapid)',
+    description: 'Simulates 15 rapid transactions from same user',
+    expectedDecision: 'BLOCK',
+    category: 'Velocity',
+    payload: {
+      amount: 99.99,
+      currency: 'USD',
+      country: 'US',
+      merchant_category: 'retail',
+    },
+  },
+  {
+    id: 'shared-device',
+    name: 'Shared Device Pattern',
+    description: 'Multiple users sharing the same device ID',
+    expectedDecision: 'REVIEW',
+    category: 'Device',
+    payload: {
+      amount: 200,
+      device_id: 'shared_device_001',
+      country: 'US',
+      merchant_category: 'food_delivery',
+    },
+  },
+  {
+    id: 'ip-cluster',
+    name: 'IP Address Cluster',
+    description: 'Transaction from known suspicious IP range',
+    expectedDecision: 'REVIEW',
+    category: 'Network',
+    payload: {
+      amount: 300,
+      ip_address: '185.220.101.42',
+      country: 'RU',
+      is_international: true,
+    },
+  },
+  {
+    id: 'multi-rule-high',
+    name: 'Multi-Rule: High Amount + Int\'l',
+    description: 'High amount international crypto transaction',
+    expectedDecision: 'BLOCK',
+    category: 'Combo',
+    payload: {
+      amount: 3500,
+      currency: 'USD',
+      country: 'CN',
+      merchant_category: 'crypto_exchange',
+      payment_method: 'crypto',
+      is_international: true,
+    },
+  },
+  {
+    id: 'multi-rule-medium',
+    name: 'Multi-Rule: New Account + Travel',
+    description: 'New account making travel purchase',
+    expectedDecision: 'REVIEW',
+    category: 'Combo',
+    payload: {
+      amount: 800,
+      country: 'BR',
+      merchant_category: 'travel',
+      account_age_days: 3,
+      is_international: true,
+    },
+  },
+  {
+    id: 'clean-domestic',
+    name: 'Clean: Domestic Groceries',
+    description: 'Normal domestic grocery purchase — should ALLOW',
+    expectedDecision: 'ALLOW',
+    category: 'Clean',
+    payload: {
+      amount: 45.67,
+      currency: 'USD',
+      country: 'US',
+      merchant_category: 'groceries',
+      payment_method: 'debit_card',
+      is_international: false,
+      account_age_days: 730,
+    },
+  },
+  {
+    id: 'clean-regular',
+    name: 'Clean: Regular Online Purchase',
+    description: 'Established customer making normal purchase — should ALLOW',
+    expectedDecision: 'ALLOW',
+    category: 'Clean',
+    payload: {
+      amount: 129.99,
+      currency: 'USD',
+      country: 'US',
+      merchant_category: 'retail',
+      payment_method: 'credit_card',
+      is_international: false,
+      customer_age: 35,
+      account_age_days: 1200,
+    },
+  },
+  {
+    id: 'gambling-intl',
+    name: 'International Gambling',
+    description: 'Offshore gambling site transaction',
+    expectedDecision: 'BLOCK',
+    category: 'Category',
+    payload: {
+      amount: 2000,
+      currency: 'USD',
+      country: 'KE',
+      merchant_category: 'gambling',
+      payment_method: 'digital_wallet',
+      is_international: true,
+    },
+  },
+  {
+    id: 'luxury-new-account',
+    name: 'Luxury Goods + New Account',
+    description: 'Brand new account purchasing luxury items',
+    expectedDecision: 'BLOCK',
+    category: 'Combo',
+    payload: {
+      amount: 4200,
+      currency: 'USD',
+      country: 'US',
+      merchant_category: 'luxury_goods',
+      payment_method: 'credit_card',
+      account_age_days: 1,
+      customer_age: 22,
+    },
+  },
+]
+
+export const reasonDescriptions: Record<string, string> = {
+  high_risk_country: 'Transaction originates from a country flagged as high-risk for fraud',
+  elevated_composite_score: 'The combined fraud score from all services exceeds the threshold',
+  velocity_spike: 'Unusually high number of transactions in a short time period',
+  unusual_amount: 'Transaction amount deviates significantly from user\'s typical spending',
+  device_mismatch: 'Device fingerprint does not match any previously seen for this user',
+  ip_geo_anomaly: 'IP geolocation does not match the declared transaction country',
+  new_account: 'Account was created very recently, increasing fraud risk',
+  round_amount: 'Transaction amount is suspiciously round (common in money laundering)',
+  high_amount: 'Transaction amount is unusually high',
+  international_transaction: 'Cross-border transaction increases risk level',
+  high_risk_merchant: 'Merchant category is associated with higher fraud rates',
+  multiple_countries: 'Transactions from multiple countries in short timeframe',
+  shared_device: 'Device has been used by multiple different users',
+  suspicious_ip: 'IP address is associated with known fraudulent activity',
+}
+
+export function generateRandomPayload(): TransactionRequest {
+  const countries = ['US', 'GB', 'DE', 'FR', 'JP', 'CA', 'AU', 'BR', 'IN', 'NG']
+  const categories = ['retail', 'electronics', 'food_delivery', 'travel', 'gambling', 'crypto_exchange', 'luxury_goods', 'groceries']
+  const methods = ['credit_card', 'debit_card', 'digital_wallet', 'bank_transfer', 'crypto']
+  const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]
+
+  const hour = Math.floor(Math.random() * 24)
+  const country = pick(countries)
+
+  return {
+    transaction_id: `txn_${Math.random().toString(36).slice(2, 14)}`,
+    user_id: `user_${Math.random().toString(36).slice(2, 10)}`,
+    amount: +(Math.random() * 2000 + 10).toFixed(2),
+    currency: 'USD',
+    timestamp: new Date().toISOString(),
+    country,
+    device_id: `dev_${Math.random().toString(36).slice(2, 10)}`,
+    ip_address: `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
+    merchant_category: pick(categories),
+    payment_method: pick(methods),
+    is_international: country !== 'US',
+    customer_age: Math.floor(Math.random() * 60) + 18,
+    account_age_days: Math.floor(Math.random() * 3000) + 1,
+    transaction_hour: hour,
+  }
+}

@@ -26,14 +26,14 @@ export function useWebSocket() {
     })
 
     socket.on('connect', () => {
-      console.log('🔌 WebSocket connected')
+      console.log('[WS] Connected')
       streamStore.setConnectionStatus('connected')
       reconnectAttempts = 0
       error.value = null
     })
 
     socket.on('disconnect', (reason) => {
-      console.log('🔌 WebSocket disconnected:', reason)
+      console.log('[WS] Disconnected:', reason)
       streamStore.setConnectionStatus('disconnected')
       streamStore.setPlaying(false)
       scheduleReconnect()
@@ -65,7 +65,7 @@ export function useWebSocket() {
   function scheduleReconnect() {
     reconnectAttempts++
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY)
-    console.log(`🔄 Reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`)
+    console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`)
     setTimeout(() => {
       if (!socket?.connected) {
         connect()

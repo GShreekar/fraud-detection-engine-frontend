@@ -2,9 +2,7 @@
 import { ref, computed } from 'vue'
 import { useHistoryStore } from '@/stores/historyStore'
 import DecisionBadge from '@/components/viz/DecisionBadge.vue'
-import ScoreGauge from '@/components/viz/ScoreGauge.vue'
-import ReasonTags from '@/components/viz/ReasonTags.vue'
-import ServiceBreakdown from '@/components/viz/ServiceBreakdown.vue'
+import TransactionDetailModal from '@/components/TransactionDetailModal.vue'
 import type { TransactionRecord } from '@/types'
 
 const historyStore = useHistoryStore()
@@ -82,8 +80,8 @@ function toggleSort(key: string) {
 }
 
 function sortIcon(key: string) {
-  if (sortKey.value !== key) return '⇅'
-  return sortDir.value === 'asc' ? '↑' : '↓'
+  if (sortKey.value !== key) return '\u21C5'
+  return sortDir.value === 'asc' ? '\u2191' : '\u2193'
 }
 
 function toggleDecisionFilter(d: string) {
@@ -195,7 +193,9 @@ function formatDate(ts: string) {
 
       <!-- Empty State -->
       <div v-if="pagedData.length === 0" class="text-center py-12 text-gray-600">
-        <div class="text-3xl mb-2">📋</div>
+        <div class="text-3xl mb-2 text-gray-600">
+          <svg class="w-8 h-8 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+        </div>
         <p>No transactions match the current filters</p>
       </div>
 
@@ -228,73 +228,6 @@ function formatDate(ts: string) {
     </div>
 
     <!-- Detail Modal -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div v-if="selectedTx" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/60" @click="selectedTx = null" />
-          <div class="relative card w-full max-w-3xl max-h-[80vh] overflow-y-auto z-10">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-semibold text-white">Transaction Detail</h3>
-              <button @click="selectedTx = null" class="text-gray-500 hover:text-white text-xl">✕</button>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <!-- Score -->
-              <div class="flex flex-col items-center gap-3">
-                <ScoreGauge :score="selectedTx.response.fraud_score" :size="140" />
-                <DecisionBadge :decision="selectedTx.response.decision" size="lg" />
-              </div>
-
-              <!-- Info -->
-              <div class="space-y-3 text-sm">
-                <div v-for="[label, value] in [
-                  ['Transaction ID', selectedTx.request.transaction_id],
-                  ['User ID', selectedTx.request.user_id],
-                  ['Amount', '$' + selectedTx.request.amount.toFixed(2) + ' ' + selectedTx.request.currency],
-                  ['Country', selectedTx.request.country],
-                  ['Device', selectedTx.request.device_id],
-                  ['IP', selectedTx.request.ip_address],
-                  ['Category', selectedTx.request.merchant_category],
-                  ['Payment', selectedTx.request.payment_method],
-                  ['Time', formatDate(selectedTx.submittedAt)],
-                ]" :key="label" class="flex justify-between">
-                  <span class="text-gray-400">{{ label }}</span>
-                  <span class="text-gray-200 font-mono text-xs">{{ value }}</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Reasons -->
-            <div class="mt-6">
-              <div class="text-sm text-gray-400 mb-2">Risk Factors</div>
-              <ReasonTags :reasons="selectedTx.response.reasons" />
-            </div>
-
-            <!-- Service Breakdown -->
-            <div class="mt-6">
-              <ServiceBreakdown :services="selectedTx.response.service_scores" />
-            </div>
-
-            <!-- Raw JSON -->
-            <details class="mt-6">
-              <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-300">Raw JSON</summary>
-              <pre class="mt-2 p-3 bg-gray-800 rounded-lg text-xs text-gray-300 overflow-x-auto">{{ JSON.stringify({ request: selectedTx.request, response: selectedTx.response }, null, 2) }}</pre>
-            </details>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <TransactionDetailModal :transaction="selectedTx" @close="selectedTx = null" />
   </div>
 </template>
-
-<style scoped>
-.modal-enter-active, .modal-leave-active {
-  transition: all 0.2s ease;
-}
-.modal-enter-from, .modal-leave-to {
-  opacity: 0;
-}
-.modal-enter-from .card, .modal-leave-to .card {
-  transform: scale(0.95);
-}
-</style>

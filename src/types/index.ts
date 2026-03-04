@@ -2,17 +2,18 @@ export interface TransactionRequest {
   transaction_id: string
   user_id: string
   amount: number
-  currency: string
+  merchant_id: string
+  currency?: string
   timestamp: string
   country: string
   device_id: string
   ip_address: string
-  merchant_category: string
-  payment_method: string
-  is_international: boolean
-  customer_age: number
-  account_age_days: number
-  transaction_hour: number
+  merchant_category?: string
+  payment_method?: string
+  is_international?: boolean
+  customer_age?: number
+  account_age_days?: number
+  transaction_hour?: number
 }
 
 export interface RuleResult {
@@ -90,6 +91,10 @@ export interface Scenario {
   expectedDecision: 'ALLOW' | 'REVIEW' | 'BLOCK'
   payload: Partial<TransactionRequest>
   category: string
+  /** Number of rapid-fire submissions for burst scenarios (e.g. velocity-burst = 15) */
+  burstCount?: number
+  /** Burst mode: 'same-user' keeps user_id constant across burst; 'same-device' keeps device_id constant but varies user_id */
+  burstMode?: 'same-user' | 'same-device'
 }
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected'

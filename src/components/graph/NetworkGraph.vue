@@ -14,6 +14,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   nodeClick: [node: GraphNode]
+  refresh: []
 }>()
 
 const svgRef = ref<SVGSVGElement | null>(null)
@@ -243,10 +244,22 @@ defineExpose({ resetZoom, centerGraph, exportSVG })
   <div class="relative">
     <!-- Toolbar -->
     <div class="absolute top-3 right-3 z-10 flex gap-2">
-      <button @click="$emit('refresh')" class="btn-ghost text-xs">🔄 Refresh</button>
-      <button @click="resetZoom" class="btn-ghost text-xs">🔍 Reset Zoom</button>
-      <button @click="centerGraph" class="btn-ghost text-xs">⊙ Center</button>
-      <button @click="exportSVG" class="btn-ghost text-xs">📥 Export SVG</button>
+      <button @click="$emit('refresh')" class="btn-ghost text-xs inline-flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Refresh
+      </button>
+      <button @click="resetZoom" class="btn-ghost text-xs inline-flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="m21 21-4.35-4.35"/></svg>
+        Reset Zoom
+      </button>
+      <button @click="centerGraph" class="btn-ghost text-xs inline-flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>
+        Center
+      </button>
+      <button @click="exportSVG" class="btn-ghost text-xs inline-flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        Export SVG
+      </button>
     </div>
 
     <!-- Legend -->

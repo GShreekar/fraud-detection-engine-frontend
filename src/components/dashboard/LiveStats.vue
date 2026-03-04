@@ -40,7 +40,10 @@ function pct(val: number) {
       <!-- ALLOW -->
       <div>
         <div class="flex items-center justify-between text-xs mb-1">
-          <span class="text-green-400 font-medium">✓ ALLOW</span>
+          <span class="text-green-400 font-medium inline-flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+            ALLOW
+          </span>
           <span class="text-gray-400 tabular-nums">{{ stats.allow }} ({{ pct(stats.allow) }}%)</span>
         </div>
         <div class="h-2 rounded-full bg-gray-800 overflow-hidden">
@@ -54,7 +57,10 @@ function pct(val: number) {
       <!-- REVIEW -->
       <div>
         <div class="flex items-center justify-between text-xs mb-1">
-          <span class="text-yellow-400 font-medium">⚠ REVIEW</span>
+          <span class="text-yellow-400 font-medium inline-flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            REVIEW
+          </span>
           <span class="text-gray-400 tabular-nums">{{ stats.review }} ({{ pct(stats.review) }}%)</span>
         </div>
         <div class="h-2 rounded-full bg-gray-800 overflow-hidden">
@@ -68,7 +74,10 @@ function pct(val: number) {
       <!-- BLOCK -->
       <div>
         <div class="flex items-center justify-between text-xs mb-1">
-          <span class="text-red-400 font-medium">✕ BLOCK</span>
+          <span class="text-red-400 font-medium inline-flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            BLOCK
+          </span>
           <span class="text-gray-400 tabular-nums">{{ stats.block }} ({{ pct(stats.block) }}%)</span>
         </div>
         <div class="h-2 rounded-full bg-gray-800 overflow-hidden">

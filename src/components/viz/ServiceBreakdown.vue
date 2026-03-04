@@ -6,17 +6,13 @@ const props = defineProps<{
   services?: ServiceScore[]
 }>()
 
-const defaultServices: ServiceScore[] = [
-  { name: 'Rules Engine', score: 0, weight: 0.3 },
-  { name: 'Velocity Service', score: 0, weight: 0.35 },
-  { name: 'Graph Analysis', score: 0, weight: 0.35 },
-]
-
-const serviceData = computed(() => props.services ?? defaultServices)
+const serviceData = computed(() => props.services ?? [])
+const hasServiceData = computed(() => serviceData.value.length > 0)
 
 const colors = ['#3b82f6', '#f59e0b', '#8b5cf6']
 
 const segments = computed(() => {
+  if (!hasServiceData.value) return []
   const total = serviceData.value.reduce((sum, s) => sum + s.weight, 0)
   let offset = 0
   return serviceData.value.map((s, i) => {
@@ -33,6 +29,10 @@ const segments = computed(() => {
     <div class="text-xs text-gray-400 font-medium uppercase tracking-wider">
       Service Breakdown
     </div>
+    <div v-if="!hasServiceData" class="text-xs text-gray-500">
+      Not provided by Fraud Detection API for this transaction.
+    </div>
+    <template v-else>
     <!-- Stacked bar -->
     <div class="h-3 rounded-full overflow-hidden flex bg-gray-800">
       <div
@@ -62,5 +62,6 @@ const segments = computed(() => {
         <span class="text-gray-600">({{ (seg.weight * 100).toFixed(0) }}%)</span>
       </div>
     </div>
+    </template>
   </div>
 </template>

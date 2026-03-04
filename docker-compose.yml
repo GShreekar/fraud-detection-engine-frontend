@@ -48,7 +48,7 @@ services:
 
   # ─── Fraud Detection API (Docker Hub — standalone only) ───────────
   fraud-api:
-    image: ${FRAUD_API_IMAGE:-yourorg/fraud-detection-engine:latest}
+    image: ${FRAUD_API_IMAGE:-gshreekar/fraud-detection-engine:latest}
     ports:
       - "8000:8000"
     environment:

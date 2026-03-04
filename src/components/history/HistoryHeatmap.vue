@@ -153,16 +153,24 @@ onMounted(() => {
 
 <template>
   <div v-if="historyStore.transactions.length === 0" class="card text-center py-12 text-gray-600">
-    <div class="text-3xl mb-2">🗺️</div>
+    <div class="text-3xl mb-2">
+      <svg class="w-8 h-8 mx-auto text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+    </div>
     <p>No transaction data for heatmap</p>
   </div>
   <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <div class="card">
-      <h3 class="text-sm font-semibold text-gray-300 mb-3">🌍 Country Risk Scores</h3>
+      <h3 class="text-sm font-semibold text-gray-300 mb-3 inline-flex items-center gap-1.5">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+        Country Risk Scores
+      </h3>
       <div ref="geoRef" class="h-[400px]" />
     </div>
     <div class="card">
-      <h3 class="text-sm font-semibold text-gray-300 mb-3">🕐 Time-of-Day Patterns</h3>
+      <h3 class="text-sm font-semibold text-gray-300 mb-3 inline-flex items-center gap-1.5">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Time-of-Day Patterns
+      </h3>
       <div ref="timeRef" class="h-[400px]" />
     </div>
   </div>

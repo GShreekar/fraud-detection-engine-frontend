@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch, computed, nextTick } from 'vue'
 import { useAnalyticsStore } from '@/stores/analyticsStore'
 import { init, use } from 'echarts/core'
-import { MapChart, HeatmapChart } from 'echarts/charts'
+import { BarChart, HeatmapChart } from 'echarts/charts'
 import {
   GridComponent,
   TooltipComponent,
@@ -12,7 +12,7 @@ import {
 import { CanvasRenderer } from 'echarts/renderers'
 import type { ECharts } from 'echarts/core'
 
-use([MapChart, HeatmapChart, GridComponent, TooltipComponent, VisualMapComponent, CalendarComponent, CanvasRenderer])
+use([BarChart, HeatmapChart, GridComponent, TooltipComponent, VisualMapComponent, CalendarComponent, CanvasRenderer])
 
 const analyticsStore = useAnalyticsStore()
 const geoChartRef = ref<HTMLDivElement | null>(null)
@@ -37,52 +37,58 @@ function renderGeoChart() {
     geoChart = init(geoChartRef.value, 'dark')
   }
 
-  const data = analyticsStore.geoHeatmap.map((d) => ({
-    name: d.country,
-    value: d.avgScore,
-    count: d.count,
-  }))
+  const sorted = [...analyticsStore.geoHeatmap].sort((a, b) => a.avgScore - b.avgScore)
+  const countries = sorted.map((d) => d.country)
+  const scores = sorted.map((d) => d.avgScore)
+  const counts = sorted.map((d) => d.count)
 
   geoChart.setOption({
     backgroundColor: 'transparent',
     tooltip: {
-      trigger: 'item',
       backgroundColor: '#1f2937',
       borderColor: '#374151',
       textStyle: { color: '#e5e7eb', fontSize: 12 },
       formatter: (params: any) => {
-        const d = data.find((x) => x.name === params.name)
-        if (!d) return params.name
-        return `<strong>${params.name}</strong><br/>Avg Score: ${d.value.toFixed(3)}<br/>Transactions: ${d.count}`
+        const idx = params.dataIndex
+        return `<strong>${countries[idx]}</strong><br/>Avg Score: ${scores[idx].toFixed(3)}<br/>Transactions: ${counts[idx]}`
       },
     },
-    visualMap: {
-      min: 0,
+    grid: {
+      top: 10,
+      bottom: 30,
+      left: 60,
+      right: 40,
+    },
+    xAxis: {
+      type: 'value',
       max: 1,
-      text: ['High Risk', 'Low Risk'],
-      realtime: false,
-      calculable: true,
-      inRange: {
-        color: ['#22c55e', '#eab308', '#ef4444'],
-      },
-      textStyle: { color: '#9ca3af' },
-      left: 'left',
-      bottom: 20,
+      axisLabel: { color: '#9ca3af', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#1f2937' } },
+    },
+    yAxis: {
+      type: 'category',
+      data: countries,
+      axisLabel: { color: '#9ca3af', fontSize: 11 },
     },
     series: [{
-      name: 'Fraud Score by Country',
-      type: 'map',
-      map: 'world',
-      roam: true,
-      emphasis: {
-        label: { show: true, color: '#fff' },
-        itemStyle: { areaColor: '#1e40af' },
-      },
+      name: 'Avg Fraud Score',
+      type: 'bar',
+      data: scores,
       itemStyle: {
-        areaColor: '#1f2937',
-        borderColor: '#374151',
+        color: (params: any) => {
+          const v = params.value
+          if (v < 0.4) return '#22c55e'
+          if (v < 0.75) return '#eab308'
+          return '#ef4444'
+        },
       },
-      data,
+      label: {
+        show: true,
+        position: 'right',
+        color: '#9ca3af',
+        fontSize: 10,
+        formatter: (params: any) => params.value.toFixed(3),
+      },
     }],
   })
 }
@@ -152,10 +158,12 @@ function loadData() {
   analyticsStore.fetchHeatmapData(selectedRange.value)
 }
 
-watch(() => analyticsStore.geoHeatmap, renderGeoChart, { deep: true })
-watch(() => analyticsStore.temporalHeatmap, renderTimeChart, { deep: true })
+watch(() => analyticsStore.geoHeatmap, () => nextTick(renderGeoChart), { deep: true, flush: 'post' })
+watch(() => analyticsStore.temporalHeatmap, () => nextTick(renderTimeChart), { deep: true, flush: 'post' })
 
 watch(selectedRange, loadData)
+
+const hasData = computed(() => analyticsStore.geoHeatmap.length > 0 || analyticsStore.temporalHeatmap.length > 0)
 
 onMounted(() => {
   loadData()
@@ -202,17 +210,30 @@ onMounted(() => {
       <button @click="loadData" class="btn-primary text-sm mt-3">Retry</button>
     </div>
 
+    <!-- No data -->
+    <div v-else-if="!hasData" class="card text-center py-16">
+      <svg class="w-12 h-12 mx-auto text-gray-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+      <p class="text-gray-400 text-lg font-medium">No heatmap data yet</p>
+      <p class="text-gray-500 text-sm mt-1">Analyze some transactions first — data from the Fraud Detection API will populate these charts.</p>
+    </div>
+
     <!-- Charts -->
     <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- Geographic Heatmap -->
       <div class="card">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🌍 Geographic Fraud Distribution</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3 inline-flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+          Geographic Fraud Distribution
+        </h3>
         <div ref="geoChartRef" class="h-[400px]" />
       </div>
 
       <!-- Time-of-Day Heatmap -->
       <div class="card">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🕐 Time-of-Day Fraud Patterns</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3 inline-flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Time-of-Day Fraud Patterns
+        </h3>
         <div ref="timeChartRef" class="h-[400px]" />
       </div>
     </div>

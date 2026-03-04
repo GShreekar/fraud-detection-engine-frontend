@@ -66,8 +66,9 @@ defineExpose({ loadPayload })
     <form @submit.prevent="submit" class="card space-y-4">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-semibold text-white">Transaction Details</h2>
-        <button type="button" @click="fillRandom" class="btn-ghost text-sm">
-          🎲 Generate Random
+        <button type="button" @click="fillRandom" class="btn-ghost text-sm inline-flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1" fill="currentColor"/><circle cx="15" cy="9" r="1" fill="currentColor"/><circle cx="9" cy="15" r="1" fill="currentColor"/><circle cx="15" cy="15" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>
+          Generate Random
         </button>
       </div>
 
@@ -150,11 +151,11 @@ defineExpose({ loadPayload })
       <div class="flex gap-3 pt-2">
         <button
           type="submit"
-          class="btn-primary"
+          class="btn-primary inline-flex items-center gap-1.5"
           :disabled="isSubmitting"
         >
-          <span v-if="isSubmitting" class="animate-spin">⏳</span>
-          <span v-else>🔍</span>
+          <svg v-if="isSubmitting" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="m21 21-4.35-4.35"/></svg>
           {{ isSubmitting ? 'Analyzing...' : 'Analyze Transaction' }}
         </button>
       </div>
@@ -162,7 +163,10 @@ defineExpose({ loadPayload })
 
     <!-- Error -->
     <div v-if="error" class="card border-red-500/50 bg-red-500/10">
-      <p class="text-red-400 font-medium">⚠️ {{ error }}</p>
+      <p class="text-red-400 font-medium inline-flex items-center gap-1.5">
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        {{ error }}
+      </p>
     </div>
 
     <!-- Response -->

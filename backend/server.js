@@ -33,14 +33,83 @@ app.use(cors());
 app.use(morgan('short'));
 app.use(express.json());
 
+async function persistAnalyzedTransaction(requestPayload, responsePayload) {
+  if (!neo4jDriver) return;
+
+  const session = neo4jDriver.session({ database: 'neo4j' });
+  try {
+    const tx = {
+      transaction_id: requestPayload.transaction_id,
+      user_id: requestPayload.user_id,
+      device_id: requestPayload.device_id,
+      ip_address: requestPayload.ip_address,
+      amount: Number(requestPayload.amount ?? 0),
+      currency: requestPayload.currency || 'USD',
+      country: requestPayload.country || 'US',
+      merchant_id: requestPayload.merchant_id || 'unknown',
+      timestamp: requestPayload.timestamp || new Date().toISOString(),
+      transaction_hour: Number.isInteger(requestPayload.transaction_hour)
+        ? requestPayload.transaction_hour
+        : new Date(requestPayload.timestamp || Date.now()).getHours(),
+      fraud_score: Number(responsePayload?.fraud_score ?? 0),
+      decision: responsePayload?.decision || 'ALLOW',
+      reasons: Array.isArray(responsePayload?.reasons) ? responsePayload.reasons : [],
+    };
+
+    await session.run(
+      `
+      MERGE (u:User {user_id: $user_id})
+      MERGE (d:Device {device_id: $device_id})
+      MERGE (ip:IPAddress {ip_address: $ip_address})
+      MERGE (t:Transaction {transaction_id: $transaction_id})
+      SET t.amount = $amount,
+          t.currency = $currency,
+          t.country = $country,
+          t.timestamp = datetime($timestamp),
+          t.transaction_hour = $transaction_hour,
+          t.fraud_score = $fraud_score,
+          t.decision = $decision,
+          t.reasons = $reasons
+      MERGE (u)-[:PERFORMED]->(t)
+      MERGE (t)-[:USED_DEVICE]->(d)
+      MERGE (t)-[:ORIGINATED_FROM]->(ip)
+      `,
+      tx
+    );
+  } catch (err) {
+    console.warn('[Neo4j] Persist transaction failed:', err.message);
+  } finally {
+    await session.close();
+  }
+
+  if (redisClient?.isOpen) {
+    try {
+      const keys = await redisClient.keys('heatmap:*');
+      if (keys.length > 0) {
+        await redisClient.del(keys);
+      }
+    } catch (err) {
+      console.warn('[Redis] Heatmap cache invalidation failed:', err.message);
+    }
+  }
+}
+
+function neo4jToNumber(value, fallback = 0) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'number') return value;
+  if (typeof value?.toNumber === 'function') return value.toNumber();
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 // ------- Neo4j Connection -------
 let neo4jDriver = null;
 try {
   neo4jDriver = neo4j.driver(NEO4J_URI, neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD));
   await neo4jDriver.verifyConnectivity();
-  console.log('✅ Connected to Neo4j');
+  console.log('[Neo4j] Connected');
 } catch (err) {
-  console.warn('⚠️  Neo4j not available, graph endpoints will return mock data:', err.message);
+  console.warn('[Neo4j] Not available, graph/heatmap endpoints will return empty data:', err.message);
 }
 
 // ------- Redis Connection -------
@@ -49,9 +118,9 @@ try {
   redisClient = createClient({ url: REDIS_URL });
   redisClient.on('error', (err) => console.warn('Redis error:', err.message));
   await redisClient.connect();
-  console.log('✅ Connected to Redis');
+  console.log('[Redis] Connected');
 } catch (err) {
-  console.warn('⚠️  Redis not available, caching disabled:', err.message);
+  console.warn('[Redis] Not available, caching disabled:', err.message);
 }
 
 // ------- Health Check -------
@@ -70,10 +139,13 @@ app.get('/api/health', (req, res) => {
 // ------- Proxy: Analyze Transaction -------
 app.post('/api/analyze', async (req, res) => {
   try {
-    const response = await axios.post(`${FRAUD_API_URL}/api/v1/analyze`, req.body, {
+    const response = await axios.post(`${FRAUD_API_URL}/api/v1/transactions/analyze`, req.body, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' },
     });
+
+    await persistAnalyzedTransaction(req.body, response.data);
+
     res.json(response.data);
   } catch (err) {
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
@@ -93,9 +165,13 @@ app.post('/api/analyze', async (req, res) => {
 app.get('/api/graph/network', async (req, res) => {
   const { user_id, transaction_id, limit = 100 } = req.query;
 
-  // If Neo4j is not available, return mock data
+  // If Neo4j is not available, return empty graph (no mock data)
   if (!neo4jDriver) {
-    return res.json(generateMockGraphData());
+    return res.status(503).json({
+      error: 'Neo4j is unavailable',
+      nodes: [],
+      edges: [],
+    });
   }
 
   const session = neo4jDriver.session({ database: 'neo4j' });
@@ -180,10 +256,15 @@ app.get('/api/graph/network', async (req, res) => {
       if (t && ip) edges.push({ source: t.elementId, target: ip.elementId, type: 'ORIGINATED_FROM' });
     });
 
-    res.json({ nodes: Array.from(nodes.values()), edges });
+    const graphResult = { nodes: Array.from(nodes.values()), edges };
+
+    res.json(graphResult);
   } catch (err) {
-    console.error('Neo4j query error:', err);
-    res.status(500).json({ error: 'Failed to query graph database', details: err.message });
+    console.error('Neo4j query error:', err.message);
+    res.status(500).json({
+      error: 'Failed to query Neo4j graph data',
+      details: err.message,
+    });
   } finally {
     await session.close();
   }
@@ -193,9 +274,17 @@ app.get('/api/graph/network', async (req, res) => {
 app.get('/api/analytics/heatmap', async (req, res) => {
   const { range = '7d' } = req.query;
 
-  // If Neo4j is not available, return mock data
+  // Convert shorthand range (e.g. '7d') to ISO 8601 duration (e.g. 'P7D')
+  const rangeMap = { '1d': 'P1D', '7d': 'P7D', '30d': 'P30D', '365d': 'P365D' };
+  const isoDuration = rangeMap[range] || `P${range.replace(/d$/i, 'D')}`;
+
+  // If Neo4j is not available, return empty heatmap (no mock data)
   if (!neo4jDriver) {
-    return res.json(generateMockHeatmapData());
+    return res.status(503).json({
+      error: 'Neo4j is unavailable',
+      geographic: [],
+      temporal: [],
+    });
   }
 
   // Check cache
@@ -212,28 +301,28 @@ app.get('/api/analytics/heatmap', async (req, res) => {
       WHERE t.timestamp > datetime() - duration($range)
       RETURN t.country AS country, avg(t.fraud_score) AS avgScore, count(t) AS count
       ORDER BY avgScore DESC
-    `, { range });
+    `, { range: isoDuration });
 
     const timeResult = await session.run(`
       MATCH (t:Transaction)
       WHERE t.timestamp > datetime() - duration($range)
       RETURN t.transaction_hour AS hour, 
-             date(t.timestamp).dayOfWeek AS day,
+             date(t.timestamp).dayOfWeek - 1 AS day,
              avg(t.fraud_score) AS avgScore, 
              count(t) AS count
       ORDER BY day, hour
-    `, { range });
+    `, { range: isoDuration });
 
     const data = {
       geographic: geoResult.records.map((r) => ({
         country: r.get('country'),
-        avgScore: r.get('avgScore'),
+        avgScore: neo4jToNumber(r.get('avgScore')),
         count: r.get('count').toNumber(),
       })),
       temporal: timeResult.records.map((r) => ({
-        hour: r.get('hour').toNumber(),
-        day: r.get('day').toNumber(),
-        avgScore: r.get('avgScore'),
+        hour: neo4jToNumber(r.get('hour')),
+        day: neo4jToNumber(r.get('day')),
+        avgScore: neo4jToNumber(r.get('avgScore')),
         count: r.get('count').toNumber(),
       })),
     };
@@ -244,74 +333,22 @@ app.get('/api/analytics/heatmap', async (req, res) => {
 
     res.json(data);
   } catch (err) {
-    console.error('Heatmap query error:', err);
-    res.status(500).json({ error: 'Failed to query analytics', details: err.message });
+    console.error('Heatmap query error:', err.message);
+    res.status(500).json({
+      error: 'Failed to query Neo4j heatmap data',
+      details: err.message,
+    });
   } finally {
     await session.close();
   }
 });
-
-// ------- Mock Data Generators -------
-function generateMockGraphData() {
-  const nodes = [];
-  const edges = [];
-  const userCount = 5;
-  const txPerUser = 4;
-
-  for (let u = 0; u < userCount; u++) {
-    const userId = `user_${u + 1}`;
-    const deviceId = `device_${u + 1}`;
-    const ipId = `ip_${(u % 3) + 1}`;
-
-    nodes.push({ id: userId, type: 'User', label: userId, properties: { user_id: userId } });
-    if (!nodes.find((n) => n.id === deviceId)) {
-      nodes.push({ id: deviceId, type: 'Device', label: deviceId, properties: { device_id: deviceId } });
-    }
-    if (!nodes.find((n) => n.id === ipId)) {
-      nodes.push({ id: ipId, type: 'IPAddress', label: ipId, properties: { ip_address: `192.168.1.${(u % 3) + 1}` } });
-    }
-
-    for (let t = 0; t < txPerUser; t++) {
-      const txId = `tx_${u * txPerUser + t + 1}`;
-      nodes.push({ id: txId, type: 'Transaction', label: txId, properties: { amount: Math.random() * 1000 } });
-      edges.push({ source: userId, target: txId, type: 'PERFORMED' });
-      edges.push({ source: txId, target: deviceId, type: 'USED_DEVICE' });
-      edges.push({ source: txId, target: ipId, type: 'ORIGINATED_FROM' });
-    }
-  }
-
-  return { nodes, edges };
-}
-
-function generateMockHeatmapData() {
-  const countries = ['US', 'GB', 'NG', 'BR', 'IN', 'DE', 'FR', 'JP', 'CN', 'RU', 'AU', 'CA', 'MX', 'ZA', 'KE'];
-  const geographic = countries.map((c) => ({
-    country: c,
-    avgScore: +(Math.random() * 0.8 + 0.1).toFixed(3),
-    count: Math.floor(Math.random() * 500) + 10,
-  }));
-
-  const temporal = [];
-  for (let day = 0; day < 7; day++) {
-    for (let hour = 0; hour < 24; hour++) {
-      temporal.push({
-        hour,
-        day,
-        avgScore: +(Math.random() * 0.6 + 0.2).toFixed(3),
-        count: Math.floor(Math.random() * 100) + 1,
-      });
-    }
-  }
-
-  return { geographic, temporal };
-}
 
 // ------- WebSocket: Stream Namespace -------
 setupStreamNamespace(io);
 
 // ------- Start Server -------
 httpServer.listen(PORT, () => {
-  console.log(`\n🚀 Backend server running at http://localhost:${PORT}`);
+  console.log(`\n[Server] Backend running at http://localhost:${PORT}`);
   console.log(`   Fraud API proxy → ${FRAUD_API_URL}`);
   console.log(`   Neo4j → ${NEO4J_URI}`);
   console.log(`   Redis → ${REDIS_URL}\n`);

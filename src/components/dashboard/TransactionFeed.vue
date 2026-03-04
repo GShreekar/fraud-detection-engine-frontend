@@ -6,6 +6,10 @@ import DecisionBadge from '@/components/viz/DecisionBadge.vue'
 
 const streamStore = useStreamStore()
 
+const emit = defineEmits<{
+  select: [transaction: TransactionRecord]
+}>()
+
 const visibleTransactions = computed<TransactionRecord[]>(() => {
   return streamStore.transactions.slice(0, 50)
 })
@@ -30,10 +34,11 @@ function scoreColor(score: number) {
 
     <div class="flex-1 overflow-y-auto space-y-1 p-2">
       <TransitionGroup name="feed">
-        <div
+        <button
           v-for="tx in visibleTransactions"
           :key="tx.id"
-          class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-800/50 hover:bg-gray-800 transition-all text-xs"
+          @click="emit('select', tx)"
+          class="w-full flex items-center gap-3 p-2.5 rounded-lg bg-gray-800/50 hover:bg-gray-800 transition-all text-xs cursor-pointer text-left"
         >
           <!-- Score indicator -->
           <div
@@ -54,7 +59,7 @@ function scoreColor(score: number) {
             </div>
             <div class="flex items-center gap-2 mt-0.5">
               <span class="text-white font-medium">${{ tx.request.amount.toFixed(2) }}</span>
-              <span class="text-gray-600">{{ tx.request.merchant_category.replace(/_/g, ' ') }}</span>
+              <span class="text-gray-600">{{ tx.request.merchant_category?.replace(/_/g, ' ') || 'N/A' }}</span>
             </div>
           </div>
 
@@ -70,14 +75,16 @@ function scoreColor(score: number) {
           <div class="text-gray-600 text-[10px] flex-shrink-0 w-16 text-right">
             {{ formatTime(tx.submittedAt) }}
           </div>
-        </div>
+        </button>
       </TransitionGroup>
 
       <div
         v-if="visibleTransactions.length === 0"
         class="flex flex-col items-center justify-center h-full text-gray-600"
       >
-        <div class="text-3xl mb-2">📡</div>
+        <div class="text-3xl mb-2">
+          <svg class="w-8 h-8 mx-auto text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+        </div>
         <p class="text-sm">No transactions yet</p>
         <p class="text-xs">Start the stream to see live data</p>
       </div>

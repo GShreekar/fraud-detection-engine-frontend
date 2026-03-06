@@ -3,16 +3,23 @@ export interface TransactionRequest {
   user_id: string
   amount: number
   merchant_id: string
-  currency?: string
   timestamp: string
   country: string
   device_id: string
   ip_address: string
+  /** BFF-only: not used by the Python fraud scoring engine */
+  currency?: string
+  /** BFF-only: not used by the Python fraud scoring engine */
   merchant_category?: string
+  /** BFF-only: not used by the Python fraud scoring engine */
   payment_method?: string
+  /** BFF-only: not used by the Python fraud scoring engine */
   is_international?: boolean
+  /** BFF-only: not used by the Python fraud scoring engine */
   customer_age?: number
+  /** BFF-only: not used by the Python fraud scoring engine */
   account_age_days?: number
+  /** BFF-only: not used by the Python fraud scoring engine */
   transaction_hour?: number
 }
 
@@ -33,12 +40,16 @@ export interface TransactionResponse {
   transaction_id: string
   fraud_score: number
   decision: 'ALLOW' | 'REVIEW' | 'BLOCK'
-  risk_level: string
   reasons: string[]
-  rules_triggered: RuleResult[]
-  service_scores?: ServiceScore[]
-  processing_time_ms?: number
   timestamp: string
+  /** Derived client-side from decision; not returned by the Python API */
+  risk_level?: string
+  /** Derived client-side from reasons[]; not returned by the Python API */
+  rules_triggered?: RuleResult[]
+  /** Not currently returned by the Python API */
+  service_scores?: ServiceScore[]
+  /** Not currently returned by the Python API */
+  processing_time_ms?: number
 }
 
 export interface TransactionRecord {

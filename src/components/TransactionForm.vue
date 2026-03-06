@@ -191,11 +191,11 @@ defineExpose({ loadPayload })
             </div>
             <div>
               <span class="text-gray-400">Processing Time:</span>
-              <span class="ml-2 text-white">{{ response.processing_time_ms }}ms</span>
+              <span class="ml-2 text-white">{{ response.processing_time_ms != null ? response.processing_time_ms + 'ms' : 'N/A' }}</span>
             </div>
             <div>
               <span class="text-gray-400">Risk Level:</span>
-              <span class="ml-2 text-white capitalize">{{ response.risk_level }}</span>
+              <span class="ml-2 text-white capitalize">{{ response.risk_level || response.decision.toLowerCase() }}</span>
             </div>
           </div>
 

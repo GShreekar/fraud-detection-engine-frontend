@@ -2,6 +2,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { io, Socket } from 'socket.io-client'
 import { useStreamStore } from '@/stores/streamStore'
 import { useHistoryStore } from '@/stores/historyStore'
+import { normalizeTransactionResponse } from '@/services/api'
 import type { TransactionRecord } from '@/types'
 
 const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3001'
@@ -50,7 +51,7 @@ export function useWebSocket() {
       const record: TransactionRecord = {
         id: tx.transaction_id || tx.response?.transaction_id || crypto.randomUUID(),
         request: tx.request,
-        response: tx.response,
+        response: normalizeTransactionResponse(tx.response, tx.request),
         submittedAt: new Date().toISOString(),
       }
       streamStore.addTransaction(record)

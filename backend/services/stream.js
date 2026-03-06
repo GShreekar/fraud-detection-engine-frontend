@@ -5,7 +5,8 @@ const COUNTRIES = ['US', 'GB', 'DE', 'FR', 'JP', 'CA', 'AU', 'BR', 'IN', 'NG', '
 const MERCHANT_CATEGORIES = ['retail', 'electronics', 'food_delivery', 'travel', 'gambling', 'crypto_exchange', 'luxury_goods', 'groceries'];
 const PAYMENT_METHODS = ['credit_card', 'debit_card', 'digital_wallet', 'bank_transfer', 'crypto'];
 
-const ANALYZE_URL = process.env.STREAM_ANALYZE_URL || 'http://localhost:3001/api/analyze';
+const PORT = process.env.PORT || 3001;
+const ANALYZE_URL = process.env.STREAM_ANALYZE_URL || `http://localhost:${PORT}/api/analyze`;
 
 function generateTransaction() {
   const country = faker.helpers.arrayElement(COUNTRIES);

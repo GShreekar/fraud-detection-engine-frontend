@@ -40,7 +40,7 @@ export const useHistoryStore = defineStore('history', () => {
     const headers = [
       'transaction_id', 'timestamp', 'user_id', 'amount', 'currency',
       'country', 'device_id', 'ip_address', 'merchant_category',
-      'decision', 'fraud_score', 'risk_level', 'reasons',
+      'decision', 'fraud_score', 'reasons',
     ]
 
     const rows = transactions.value.map((t) => [
@@ -48,14 +48,13 @@ export const useHistoryStore = defineStore('history', () => {
       t.request.timestamp,
       t.request.user_id,
       t.request.amount,
-      t.request.currency,
+      t.request.currency ?? '',
       t.request.country,
       t.request.device_id,
       t.request.ip_address,
-      t.request.merchant_category,
+      t.request.merchant_category ?? '',
       t.response.decision,
       t.response.fraud_score,
-      t.response.risk_level,
       t.response.reasons.join('; '),
     ])
 

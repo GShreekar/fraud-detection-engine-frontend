@@ -40,13 +40,6 @@ async function persistAnalyzedTransaction(requestPayload, responsePayload) {
   try {
     const tx = {
       transaction_id: requestPayload.transaction_id,
-      user_id: requestPayload.user_id,
-      device_id: requestPayload.device_id,
-      ip_address: requestPayload.ip_address,
-      amount: Number(requestPayload.amount ?? 0),
-      currency: requestPayload.currency || 'USD',
-      country: requestPayload.country || 'US',
-      merchant_id: requestPayload.merchant_id || 'unknown',
       timestamp: requestPayload.timestamp || new Date().toISOString(),
       transaction_hour: Number.isInteger(requestPayload.transaction_hour)
         ? requestPayload.transaction_hour
@@ -56,23 +49,16 @@ async function persistAnalyzedTransaction(requestPayload, responsePayload) {
       reasons: Array.isArray(responsePayload?.reasons) ? responsePayload.reasons : [],
     };
 
+    // Only enrich the Transaction node with analytics properties.
+    // Nodes and relationships are already created by the Python fraud engine.
     await session.run(
       `
-      MERGE (u:User {user_id: $user_id})
-      MERGE (d:Device {device_id: $device_id})
-      MERGE (ip:IPAddress {ip_address: $ip_address})
       MERGE (t:Transaction {transaction_id: $transaction_id})
-      SET t.amount = $amount,
-          t.currency = $currency,
-          t.country = $country,
-          t.timestamp = datetime($timestamp),
+      SET t.timestamp = datetime($timestamp),
           t.transaction_hour = $transaction_hour,
           t.fraud_score = $fraud_score,
           t.decision = $decision,
           t.reasons = $reasons
-      MERGE (u)-[:PERFORMED]->(t)
-      MERGE (t)-[:USED_DEVICE]->(d)
-      MERGE (t)-[:ORIGINATED_FROM]->(ip)
       `,
       tx
     );

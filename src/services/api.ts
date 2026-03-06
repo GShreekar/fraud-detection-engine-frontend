@@ -7,7 +7,7 @@ const client = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-function normalizeTransactionResponse(raw: any, payload: TransactionRequest): TransactionResponse {
+export function normalizeTransactionResponse(raw: any, payload: TransactionRequest): TransactionResponse {
   const fraudScore = Number(raw?.fraud_score ?? 0)
   const reasons = Array.isArray(raw?.reasons) ? raw.reasons.map((r: any) => String(r)) : []
   const decision: TransactionResponse['decision'] = raw?.decision || (fraudScore >= 0.75 ? 'BLOCK' : fraudScore >= 0.4 ? 'REVIEW' : 'ALLOW')

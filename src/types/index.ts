@@ -41,7 +41,7 @@ export interface TransactionResponse {
   fraud_score: number
   decision: 'ALLOW' | 'REVIEW' | 'BLOCK'
   reasons: string[]
-  timestamp: string
+  timestamp?: string
   /** Derived client-side from decision; not returned by the Python API */
   risk_level?: string
   /** Derived client-side from reasons[]; not returned by the Python API */
@@ -99,13 +99,28 @@ export interface Scenario {
   id: string
   name: string
   description: string
-  expectedDecision: 'ALLOW' | 'REVIEW' | 'BLOCK'
+  suite: 'isolated' | 'stateful'
+  expected: {
+    decision: 'ALLOW' | 'REVIEW' | 'BLOCK'
+    scoreMin: number
+    scoreMax: number
+    mustIncludeReasons?: string[]
+    allowExtraReasons?: boolean
+  }
   payload: Partial<TransactionRequest>
   category: string
   /** Number of rapid-fire submissions for burst scenarios (e.g. velocity-burst = 15) */
   burstCount?: number
-  /** Burst mode: 'same-user' keeps user_id constant across burst; 'same-device' keeps device_id constant but varies user_id */
-  burstMode?: 'same-user' | 'same-device'
+  /** Burst mode controls which fields are pinned/varied across burst iterations */
+  burstMode?: 'same-user' | 'same-device' | 'same-ip' | 'same-merchant' | 'country-switch' | 'amount-spike' | 'idempotent-transaction' | 'same-user-new-device'
+  /** Optional explicit country sequence for country-switch bursts (e.g., ['US', 'JP']) */
+  countrySequence?: string[]
+  /** Optional explicit amount sequence for burst submissions */
+  amountSequence?: number[]
+  /** Test case name from the comprehensive test list */
+  testCase?: string
+  /** Expected output formatted as per test specifications (✅ for pass, ❌ for fail) */
+  expectedOutput?: string
 }
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected'

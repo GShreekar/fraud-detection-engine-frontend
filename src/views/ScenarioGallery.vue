@@ -1,342 +1,492 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { scenarios, generateRandomPayload } from '@/services/scenarios'
+import { computed, ref } from 'vue'
+import { generateRandomPayload, scenarios } from '@/services/scenarios'
 import { api } from '@/services/api'
 import { useHistoryStore } from '@/stores/historyStore'
 import DecisionBadge from '@/components/viz/DecisionBadge.vue'
-import TransactionDetailModal from '@/components/TransactionDetailModal.vue'
-import type { TransactionRequest, Scenario, TransactionRecord } from '@/types'
+import ReasonTags from '@/components/viz/ReasonTags.vue'
+import type { Scenario, TransactionRequest, TransactionResponse } from '@/types'
 
-const historyStore = useHistoryStore()
-const submittingIds = ref<Set<string>>(new Set())
-const results = ref<Map<string, any>>(new Map())
-const burstProgress = ref<Map<string, { current: number; total: number }>>(new Map())
-const expandedResults = ref<Set<string>>(new Set())
-const selectedTransaction = ref<TransactionRecord | null>(null)
+type ScenarioSuite = Scenario['suite']
 
-function getScenario(id: string): Scenario | undefined {
-  return scenarios.find((s) => s.id === id)
+type AssertionResult = {
+  passed: boolean
+  decisionPass: boolean
+  scorePass: boolean
+  reasonsPass: boolean
+  missingReasons: string[]
+  unexpectedReasons: string[]
 }
 
-async function submitScenario(scenarioId: string, payload: Partial<TransactionRequest>) {
-  const scenario = getScenario(scenarioId)
-  if (!scenario) return
+type ScenarioRunStep = {
+  request: TransactionRequest
+  response?: TransactionResponse
+  error?: string
+}
 
-  submittingIds.value.add(scenarioId)
+type ScenarioRunResult = {
+  scenarioId: string
+  scenarioName: string
+  suite: ScenarioSuite
+  runAt: string
+  request: TransactionRequest
+  response?: TransactionResponse
+  error?: string
+  assertions: AssertionResult
+  steps?: ScenarioRunStep[]
+}
+
+const historyStore = useHistoryStore()
+const selectedSuite = ref<ScenarioSuite>('isolated')
+const isRunningAll = ref(false)
+const activeScenarioIds = ref<Set<string>>(new Set())
+const results = ref<Map<string, ScenarioRunResult>>(new Map())
+const runOrder = ref<string[]>([])
+const suiteLabels: Record<ScenarioSuite, string> = {
+  isolated: 'Isolated Suite',
+  stateful: 'Stateful Suite',
+}
+
+const BURST_MODE_LABELS: Record<string, string> = {
+  'same-user': 'same user',
+  'same-device': 'same device',
+  'same-ip': 'same IP',
+  'same-merchant': 'same merchant',
+  'country-switch': 'country switch',
+  'amount-spike': 'amount spike',
+  'idempotent-transaction': 'same transaction id',
+  'same-user-new-device': 'same user + new device',
+}
+
+const BASE_BURST_DELAY_MS = 250
+const HEAVY_BURST_DELAY_MS = 600
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function formatJson(value: unknown) {
+  return JSON.stringify(value, null, 2)
+}
+
+function getBurstDelayMs(mode?: Scenario['burstMode']) {
+  if (mode === 'amount-spike' || mode === 'same-merchant' || mode === 'same-ip') return HEAVY_BURST_DELAY_MS
+  return BASE_BURST_DELAY_MS
+}
+
+function getBurstModeLabel(mode?: Scenario['burstMode']) {
+  return mode ? (BURST_MODE_LABELS[mode] || mode) : 'burst'
+}
+
+function getScenarioResult(scenarioId: string) {
+  return results.value.get(scenarioId)
+}
+
+const visibleScenarios = computed(() => scenarios.filter((s) => s.suite === selectedSuite.value))
+
+function getScoreBucket(score?: number) {
+  if (score === undefined) return { label: 'unknown', className: 'bg-gray-500/20 text-gray-300 border-gray-500/30' }
+  if (score >= 0.75) return { label: 'critical', className: 'bg-red-500/20 text-red-300 border-red-500/30' }
+  if (score >= 0.4) return { label: 'high', className: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30' }
+  return { label: 'low', className: 'bg-green-500/20 text-green-300 border-green-500/30' }
+}
+
+function toDeterministicTimestamp(baseTimestamp: string | undefined, stepIndex = 0) {
+  const start = Date.parse(baseTimestamp || '2026-03-20T12:00:00.000Z')
+  const timestampMs = Number.isFinite(start)
+    ? start + stepIndex * 5000
+    : Date.parse('2026-03-20T12:00:00.000Z') + stepIndex * 5000
+  return new Date(timestampMs).toISOString()
+}
+
+function needsTransactionHour(scenario: Scenario) {
+  return scenario.expected.mustIncludeReasons?.includes('unusual_hour') ?? false
+}
+
+function applyDeterministicTimeFields(scenario: Scenario, payload: TransactionRequest, stepIndex = 0) {
+  const timestamp = toDeterministicTimestamp(payload.timestamp || scenario.payload.timestamp, stepIndex)
+  payload.timestamp = timestamp
+  if (needsTransactionHour(scenario)) {
+    payload.transaction_hour = new Date(timestamp).getUTCHours()
+  }
+}
+
+function applyIsolationIdentifiers(base: TransactionRequest, scenarioId: string, runToken: string) {
+  const suffix = `${scenarioId.toLowerCase()}_${runToken}`
+  return {
+    ...base,
+    transaction_id: `${base.transaction_id}_${suffix}`,
+    user_id: `${base.user_id}_${suffix}`,
+    device_id: `${base.device_id}_${suffix}`,
+    merchant_id: `${base.merchant_id}_${suffix}`,
+    ip_address: `198.18.${Math.floor(Math.random() * 200)}.${Math.floor(Math.random() * 200)}`,
+  }
+}
+
+function evaluateAssertions(scenario: Scenario, response?: TransactionResponse): AssertionResult {
+  if (!response) {
+    return {
+      passed: false,
+      decisionPass: false,
+      scorePass: false,
+      reasonsPass: false,
+      missingReasons: scenario.expected.mustIncludeReasons || [],
+      unexpectedReasons: [],
+    }
+  }
+
+  const decisionPass = response.decision === scenario.expected.decision
+  const scorePass = response.fraud_score >= scenario.expected.scoreMin && response.fraud_score <= scenario.expected.scoreMax
+
+  const expectedReasons = scenario.expected.mustIncludeReasons || []
+  const missingReasons = expectedReasons.filter((reason) => !response.reasons.includes(reason))
+  const unexpectedReasons = expectedReasons.length
+    ? response.reasons.filter((reason) => !expectedReasons.includes(reason))
+    : []
+  const subsetPass = missingReasons.length === 0
+  const reasonsPass = scenario.expected.allowExtraReasons === false
+    ? subsetPass && unexpectedReasons.length === 0
+    : subsetPass
+
+  return {
+    passed: decisionPass && scorePass && reasonsPass,
+    decisionPass,
+    scorePass,
+    reasonsPass,
+    missingReasons,
+    unexpectedReasons,
+  }
+}
+
+async function runSingleScenario(scenario: Scenario) {
+  const runToken = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
+  activeScenarioIds.value.add(scenario.id)
 
   try {
-    // Burst mode: send multiple transactions with pinned fields
+    const basePayload: TransactionRequest = { ...generateRandomPayload(), ...scenario.payload }
+    const preparedBase = scenario.suite === 'isolated'
+      ? applyIsolationIdentifiers(basePayload, scenario.id, runToken)
+      : basePayload
+
     if (scenario.burstCount && scenario.burstCount > 1) {
+      const steps: ScenarioRunStep[] = []
       const total = scenario.burstCount
-      burstProgress.value.set(scenarioId, { current: 0, total })
+      const switchCountries = scenario.countrySequence?.length
+        ? scenario.countrySequence
+        : ['US', 'GB', 'DE', 'FR', 'JP', 'CA']
 
-      // Generate a stable base payload for deterministic burst behavior
-      const burstRunId = Date.now().toString(36)
-      const basePayload: TransactionRequest = {
-        ...generateRandomPayload(),
-        ...payload,
-        country: payload.country ?? 'US',
-        is_international: payload.is_international ?? false,
-        account_age_days: payload.account_age_days ?? 365,
-        customer_age: payload.customer_age ?? 32,
-        payment_method: payload.payment_method ?? 'credit_card',
-      }
-      const pinnedUserId = basePayload.user_id
-      const pinnedIpAddress = basePayload.ip_address
-      // Use a fresh device id per run so past runs don't contaminate shared-device scenario
-      const pinnedDeviceId = scenario.burstMode === 'same-device'
-        ? `${payload.device_id || basePayload.device_id}_${burstRunId}`
-        : (payload.device_id || basePayload.device_id)
-
-      const allResults: any[] = []
+      const pinnedUserId = preparedBase.user_id
+      const pinnedDeviceId = preparedBase.device_id
+      const pinnedIpAddress = preparedBase.ip_address
+      const pinnedMerchantId = preparedBase.merchant_id
+      const pinnedTransactionId = preparedBase.transaction_id
 
       for (let i = 0; i < total; i++) {
-        const iterPayload: TransactionRequest = {
-          ...basePayload,
-          transaction_id: `${basePayload.transaction_id}_${i + 1}_${Math.random().toString(36).slice(2, 6)}`,
-          timestamp: new Date().toISOString(),
+        let request: TransactionRequest = {
+          ...preparedBase,
+          transaction_id: `${preparedBase.transaction_id}_${i + 1}`,
         }
-        let fullPayload: TransactionRequest
 
         if (scenario.burstMode === 'same-user') {
-          // Velocity burst: same user_id and ip_address, different transaction_ids
-          fullPayload = { ...iterPayload, user_id: pinnedUserId, ip_address: pinnedIpAddress }
+          request = { ...request, user_id: pinnedUserId, ip_address: pinnedIpAddress }
         } else if (scenario.burstMode === 'same-device') {
-          // Shared device: different user_ids, same (fresh-per-run) device_id
-          fullPayload = { ...iterPayload, user_id: `${basePayload.user_id}_${i + 1}`, device_id: pinnedDeviceId }
-        } else {
-          fullPayload = { ...iterPayload }
+          request = { ...request, user_id: `${preparedBase.user_id}_${i + 1}`, device_id: pinnedDeviceId }
+        } else if (scenario.burstMode === 'same-ip') {
+          request = {
+            ...request,
+            user_id: `${preparedBase.user_id}_${i + 1}`,
+            device_id: `${preparedBase.device_id}_${i + 1}`,
+            ip_address: pinnedIpAddress,
+          }
+        } else if (scenario.burstMode === 'same-merchant') {
+          request = {
+            ...request,
+            user_id: `${preparedBase.user_id}_${i + 1}`,
+            device_id: `${preparedBase.device_id}_${i + 1}`,
+            merchant_id: pinnedMerchantId,
+          }
+        } else if (scenario.burstMode === 'country-switch') {
+          const country = i === 0 ? preparedBase.country : switchCountries[i % switchCountries.length]
+          request = {
+            ...request,
+            user_id: pinnedUserId,
+            device_id: pinnedDeviceId,
+            ip_address: pinnedIpAddress,
+            country,
+            is_international: country !== 'US',
+          }
+        } else if (scenario.burstMode === 'amount-spike') {
+          const amount = scenario.amountSequence?.[i] ?? (i < total - 1 ? 25 + i * 5 : 600)
+          request = {
+            ...request,
+            user_id: pinnedUserId,
+            device_id: pinnedDeviceId,
+            ip_address: pinnedIpAddress,
+            amount,
+          }
+        } else if (scenario.burstMode === 'idempotent-transaction') {
+          request = {
+            ...request,
+            transaction_id: pinnedTransactionId,
+            user_id: pinnedUserId,
+            device_id: pinnedDeviceId,
+            ip_address: pinnedIpAddress,
+          }
         }
 
+        if (scenario.amountSequence?.[i] !== undefined) {
+          request.amount = scenario.amountSequence[i]
+        }
+
+        applyDeterministicTimeFields(scenario, request, i)
+
         try {
-          const result = await api.analyzeTransaction(fullPayload)
-          allResults.push({ request: fullPayload, response: result })
+          const response = await api.analyzeTransaction(request)
+          steps.push({ request, response })
           historyStore.addTransaction({
-            id: fullPayload.transaction_id,
-            request: fullPayload,
-            response: result,
+            id: request.transaction_id,
+            request,
+            response,
             submittedAt: new Date().toISOString(),
           })
         } catch (err: any) {
-          allResults.push({ request: fullPayload, error: err.message || 'Failed' })
+          steps.push({ request, error: err?.message || 'Failed' })
         }
 
-        burstProgress.value.set(scenarioId, { current: i + 1, total })
-        // Small delay between rapid submissions
-        if (i < total - 1) await new Promise((r) => setTimeout(r, 100))
+        if (i < total - 1) await sleep(getBurstDelayMs(scenario.burstMode))
       }
 
-      // Store the last result (most likely to trigger) and burst summary
-      const lastSuccess = [...allResults].reverse().find((r) => r.response)
-      const summary = {
-        ...(lastSuccess?.response || { error: 'All requests failed' }),
-        _burst: {
-          total,
-          results: allResults.map((r) => ({
-            transaction_id: r.request.transaction_id,
-            user_id: r.request.user_id,
-            device_id: r.request.device_id,
-            fraud_score: r.response?.fraud_score,
-            decision: r.response?.decision,
-            error: r.error,
-          })),
-        },
-        _lastRequest: lastSuccess?.request || allResults[allResults.length - 1]?.request,
-        _lastResponse: lastSuccess?.response,
+      const lastSuccess = [...steps].reverse().find((step) => step.response)
+      const request = lastSuccess?.request || steps[steps.length - 1].request
+      const response = lastSuccess?.response
+      const error = response ? undefined : steps[steps.length - 1].error || 'No successful response'
+      const assertions = evaluateAssertions(scenario, response)
+
+      const run: ScenarioRunResult = {
+        scenarioId: scenario.id,
+        scenarioName: scenario.name,
+        suite: scenario.suite,
+        runAt: new Date().toISOString(),
+        request,
+        response,
+        error,
+        assertions,
+        steps,
       }
-      results.value.set(scenarioId, summary)
-      burstProgress.value.delete(scenarioId)
-    } else {
-      // Single submission
-      const fullPayload: TransactionRequest = { ...generateRandomPayload(), ...payload }
-      const result = await api.analyzeTransaction(fullPayload)
-      results.value.set(scenarioId, {
-        ...result,
-        _lastRequest: fullPayload,
-        _lastResponse: result,
-      })
-      historyStore.addTransaction({
-        id: fullPayload.transaction_id,
-        request: fullPayload,
-        response: result,
-        submittedAt: new Date().toISOString(),
-      })
+      results.value.set(scenario.id, run)
+      runOrder.value = [scenario.id, ...runOrder.value.filter((id) => id !== scenario.id)]
+      return
     }
+
+    const request = { ...preparedBase }
+    applyDeterministicTimeFields(scenario, request, 0)
+    const response = await api.analyzeTransaction(request)
+    historyStore.addTransaction({
+      id: request.transaction_id,
+      request,
+      response,
+      submittedAt: new Date().toISOString(),
+    })
+    const assertions = evaluateAssertions(scenario, response)
+    const run: ScenarioRunResult = {
+      scenarioId: scenario.id,
+      scenarioName: scenario.name,
+      suite: scenario.suite,
+      runAt: new Date().toISOString(),
+      request,
+      response,
+      assertions,
+    }
+    results.value.set(scenario.id, run)
+    runOrder.value = [scenario.id, ...runOrder.value.filter((id) => id !== scenario.id)]
   } catch (err: any) {
-    results.value.set(scenarioId, { error: err.message || 'Failed' })
+    const fallbackRequest = { ...generateRandomPayload(), ...scenario.payload } as TransactionRequest
+    applyDeterministicTimeFields(scenario, fallbackRequest, 0)
+    const assertions = evaluateAssertions(scenario, undefined)
+    const run: ScenarioRunResult = {
+      scenarioId: scenario.id,
+      scenarioName: scenario.name,
+      suite: scenario.suite,
+      runAt: new Date().toISOString(),
+      request: fallbackRequest,
+      error: err?.message || 'Failed',
+      assertions,
+    }
+    results.value.set(scenario.id, run)
+    runOrder.value = [scenario.id, ...runOrder.value.filter((id) => id !== scenario.id)]
   } finally {
-    submittingIds.value.delete(scenarioId)
+    activeScenarioIds.value.delete(scenario.id)
   }
 }
 
-async function autoSubmit(scenarioId: string, payload: Partial<TransactionRequest>, count: number = 10) {
-  for (let i = 0; i < count; i++) {
-    await submitScenario(scenarioId, payload)
-    await new Promise((r) => setTimeout(r, 200))
+async function runAllInSuite() {
+  if (isRunningAll.value) return
+  isRunningAll.value = true
+  try {
+    for (const scenario of visibleScenarios.value) {
+      await runSingleScenario(scenario)
+    }
+  } finally {
+    isRunningAll.value = false
   }
 }
 
-function toggleExpand(scenarioId: string) {
-  if (expandedResults.value.has(scenarioId)) {
-    expandedResults.value.delete(scenarioId)
-  } else {
-    expandedResults.value.add(scenarioId)
+function downloadJsonReport() {
+  const report = {
+    generatedAt: new Date().toISOString(),
+    suite: selectedSuite.value,
+    scenarios: visibleScenarios.value.map((scenario) => {
+      const run = results.value.get(scenario.id)
+      return {
+        scenario: {
+          id: scenario.id,
+          name: scenario.name,
+          suite: scenario.suite,
+          expected: scenario.expected,
+          payload: scenario.payload,
+        },
+        run,
+      }
+    }),
   }
-}
 
-function showTransactionDetail(scenarioId: string, transactionIndex: number) {
-  const result = results.value.get(scenarioId)
-  if (!result?._burst) return
-  
-  const burstResult = result._burst.results[transactionIndex]
-  if (!burstResult) return
-  
-  // Find the full transaction in history store
-  const fullTx = historyStore.transactions.find((t) => t.request.transaction_id === burstResult.transaction_id)
-  if (fullTx) {
-    selectedTransaction.value = fullTx
-  }
-}
-
-function getBurstSummary(burstResults: any[]) {
-  const counts = { ALLOW: 0, REVIEW: 0, BLOCK: 0, ERROR: 0 }
-  const scores = burstResults.filter((r) => r.fraud_score !== undefined).map((r) => r.fraud_score)
-  
-  burstResults.forEach((r) => {
-    if (r.error) counts.ERROR++
-    else if (r.decision) counts[r.decision as keyof typeof counts]++
-  })
-  
-  const maxScore = scores.length ? Math.max(...scores) : 0
-  return { counts, maxScore, avgScore: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0 }
-}
-
-const categories = [...new Set(scenarios.map((s) => s.category))]
-
-function scenariosByCategory(category: string) {
-  return scenarios.filter((s) => s.category === category)
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `scenario-report-${selectedSuite.value}-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 </script>
 
 <template>
   <div class="max-w-7xl mx-auto p-6">
-    <div class="mb-6">
-      <h1 class="text-2xl font-bold text-white">Test Scenarios</h1>
-      <p class="text-gray-400 mt-1">Pre-built scenarios for testing fraud detection rules</p>
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+      <div>
+        <h1 class="text-2xl font-bold text-white">Scenario Runner</h1>
+        <p class="text-gray-400 mt-1">Run isolated and stateful fraud scenarios with deterministic assertions</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          @click="selectedSuite = 'isolated'"
+          class="btn-outline text-xs"
+          :class="selectedSuite === 'isolated' ? 'ring-2 ring-blue-500/40' : ''"
+        >
+          Isolated Suite
+        </button>
+        <button
+          @click="selectedSuite = 'stateful'"
+          class="btn-outline text-xs"
+          :class="selectedSuite === 'stateful' ? 'ring-2 ring-blue-500/40' : ''"
+        >
+          Stateful Suite
+        </button>
+        <button class="btn-primary text-xs" :disabled="isRunningAll" @click="runAllInSuite">
+          {{ isRunningAll ? 'Running…' : `Run all (${suiteLabels[selectedSuite]})` }}
+        </button>
+        <button class="btn-outline text-xs" @click="downloadJsonReport">
+          Download JSON report
+        </button>
+      </div>
     </div>
 
-    <div v-for="category in categories" :key="category" class="mb-8">
-      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
-        {{ category }}
-      </h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div
-          v-for="scenario in scenariosByCategory(category)"
-          :key="scenario.id"
-          class="card-hover flex flex-col"
-        >
-          <div class="flex items-start justify-between mb-2">
-            <h3 class="font-semibold text-white text-sm">{{ scenario.name }}</h3>
-            <DecisionBadge :decision="scenario.expectedDecision" size="sm" />
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div v-for="scenario in visibleScenarios" :key="scenario.id" class="card-hover">
+        <div class="flex items-start justify-between gap-3 mb-2">
+          <div>
+            <div class="text-[11px] text-gray-500 font-mono">{{ scenario.id }}</div>
+            <h2 class="text-sm font-semibold text-white">{{ scenario.name }}</h2>
           </div>
-          <p class="text-gray-400 text-xs mb-2 flex-1">{{ scenario.description }}</p>
+          <DecisionBadge :decision="scenario.expected.decision" size="sm" />
+        </div>
+        <p class="text-xs text-gray-400 mb-3">{{ scenario.description }}</p>
 
-          <!-- Burst badge -->
-          <div v-if="scenario.burstCount" class="mb-3">
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">
-              {{ scenario.burstCount }}× burst &middot; {{ scenario.burstMode === 'same-user' ? 'same user' : 'same device' }}
+        <div class="flex flex-wrap gap-1.5 mb-3">
+          <span
+            v-if="scenario.burstCount"
+            class="text-[10px] px-2 py-0.5 rounded border bg-blue-500/20 text-blue-300 border-blue-500/30"
+          >
+            {{ scenario.burstCount }}× burst · {{ getBurstModeLabel(scenario.burstMode) }}
+          </span>
+        </div>
+
+        <button
+          class="btn-primary text-xs mb-3"
+          :disabled="isRunningAll || activeScenarioIds.has(scenario.id)"
+          @click="runSingleScenario(scenario)"
+        >
+          {{ activeScenarioIds.has(scenario.id) ? 'Running…' : 'Run one' }}
+        </button>
+
+        <div
+          v-if="getScenarioResult(scenario.id)"
+          class="rounded-lg bg-gray-900/40 border border-gray-800 p-3 text-xs"
+        >
+          <div
+            v-if="getScenarioResult(scenario.id)?.error"
+            class="text-red-300 mb-2"
+          >
+            {{ getScenarioResult(scenario.id)?.error }}
+          </div>
+
+          <div
+            v-if="getScenarioResult(scenario.id)?.response"
+            class="flex flex-wrap gap-2 mb-2"
+          >
+            <DecisionBadge
+              :decision="getScenarioResult(scenario.id)!.response!.decision"
+              size="sm"
+            />
+            <span
+              class="text-[10px] px-2 py-0.5 rounded border"
+              :class="getScoreBucket(getScenarioResult(scenario.id)!.response!.fraud_score).className"
+            >
+              {{ getScoreBucket(getScenarioResult(scenario.id)!.response!.fraud_score).label }}
+            </span>
+            <span class="text-[10px] px-2 py-0.5 rounded border border-gray-600 text-gray-300">
+              score {{ getScenarioResult(scenario.id)!.response!.fraud_score.toFixed(4) }}
             </span>
           </div>
 
-          <!-- Burst Progress -->
-          <div v-if="burstProgress.get(scenario.id)" class="mb-3">
-            <div class="flex items-center justify-between text-[10px] text-gray-400 mb-1">
-              <span>Sending burst...</span>
-              <span>{{ burstProgress.get(scenario.id)!.current }}/{{ burstProgress.get(scenario.id)!.total }}</span>
-            </div>
-            <div class="h-1.5 rounded-full bg-gray-800 overflow-hidden">
-              <div
-                class="h-full rounded-full bg-blue-500 transition-all duration-150"
-                :style="{ width: (burstProgress.get(scenario.id)!.current / burstProgress.get(scenario.id)!.total * 100) + '%' }"
-              />
-            </div>
-          </div>
-
-          <!-- Result -->
           <div
-            v-if="results.get(scenario.id)"
-            class="mb-3 p-2 rounded-lg bg-gray-800/50 text-xs"
+            v-if="getScenarioResult(scenario.id)?.response"
+            class="mb-2"
           >
-            <template v-if="results.get(scenario.id).error && !results.get(scenario.id)._burst">
-              <span class="text-red-400">{{ results.get(scenario.id).error }}</span>
-            </template>
-            <template v-else>
-              <div class="flex items-center justify-between">
-                <span class="text-gray-400">Score:</span>
-                <span class="font-mono text-white">{{ results.get(scenario.id).fraud_score?.toFixed(4) }}</span>
-              </div>
-              <div class="flex items-center justify-between mt-1">
-                <span class="text-gray-400">Decision:</span>
-                <DecisionBadge :decision="results.get(scenario.id).decision" size="sm" />
-              </div>
-
-              <!-- Burst summary -->
-              <div v-if="results.get(scenario.id)._burst" class="mt-2 pt-2 border-t border-gray-700">
-                <div class="text-[10px] text-gray-500 mb-2">Burst: {{ results.get(scenario.id)._burst.total }} transactions</div>
-                
-                <!-- Decision counts -->
-                <div class="mb-2 p-1.5 bg-gray-900/30 rounded text-[10px] space-y-0.5">
-                  <div v-if="getBurstSummary(results.get(scenario.id)._burst.results).counts.BLOCK > 0" class="flex justify-between">
-                    <span class="text-red-400">🔴 BLOCK:</span>
-                    <span class="text-red-300 font-mono">{{ getBurstSummary(results.get(scenario.id)._burst.results).counts.BLOCK }}</span>
-                  </div>
-                  <div v-if="getBurstSummary(results.get(scenario.id)._burst.results).counts.REVIEW > 0" class="flex justify-between">
-                    <span class="text-yellow-400">🟡 REVIEW:</span>
-                    <span class="text-yellow-300 font-mono">{{ getBurstSummary(results.get(scenario.id)._burst.results).counts.REVIEW }}</span>
-                  </div>
-                  <div v-if="getBurstSummary(results.get(scenario.id)._burst.results).counts.ALLOW > 0" class="flex justify-between">
-                    <span class="text-green-400">🟢 ALLOW:</span>
-                    <span class="text-green-300 font-mono">{{ getBurstSummary(results.get(scenario.id)._burst.results).counts.ALLOW }}</span>
-                  </div>
-                  <div v-if="getBurstSummary(results.get(scenario.id)._burst.results).maxScore" class="flex justify-between pt-1 border-t border-gray-700">
-                    <span class="text-gray-400">Max Score:</span>
-                    <span class="text-gray-300 font-mono">{{ getBurstSummary(results.get(scenario.id)._burst.results).maxScore.toFixed(3) }}</span>
-                  </div>
-                </div>
-
-                <!-- Transaction squares -->
-                <div class="flex gap-1 flex-wrap">
-                  <button
-                    v-for="(r, idx) in results.get(scenario.id)._burst.results"
-                    :key="idx"
-                    @click="showTransactionDetail(scenario.id, idx)"
-                    class="w-4 h-4 rounded-sm text-[8px] flex items-center justify-center font-mono cursor-pointer hover:scale-125 transition-transform"
-                    :class="{
-                      'bg-green-500/30 text-green-400': r.decision === 'ALLOW',
-                      'bg-yellow-500/30 text-yellow-400': r.decision === 'REVIEW',
-                      'bg-red-500/30 text-red-400': r.decision === 'BLOCK',
-                      'bg-gray-700 text-gray-500': r.error,
-                    }"
-                    :title="`#${idx + 1}: ${r.decision || 'ERR'} (${r.fraud_score?.toFixed(3) || 'N/A'})`"
-                  >
-                    {{ idx + 1 }}
-                  </button>
-                </div>
-              </div>
-
-              <!-- Expand/Collapse detail -->
-              <button
-                @click="toggleExpand(scenario.id)"
-                class="mt-2 text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-1"
-              >
-                <svg :class="{ 'rotate-90': expandedResults.has(scenario.id) }" class="w-3 h-3 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-                {{ expandedResults.has(scenario.id) ? 'Hide' : 'Show' }} Request / Response
-              </button>
-
-              <!-- Expanded detail -->
-              <div v-if="expandedResults.has(scenario.id)" class="mt-2 space-y-2">
-                <div>
-                  <div class="text-[10px] text-gray-500 mb-0.5 font-semibold">Request:</div>
-                  <pre class="p-2 bg-gray-900 rounded text-[10px] text-gray-300 overflow-x-auto max-h-40 overflow-y-auto">{{ JSON.stringify(results.get(scenario.id)._lastRequest, null, 2) }}</pre>
-                </div>
-                <div>
-                  <div class="text-[10px] text-gray-500 mb-0.5 font-semibold">Response:</div>
-                  <pre class="p-2 bg-gray-900 rounded text-[10px] text-gray-300 overflow-x-auto max-h-40 overflow-y-auto">{{ JSON.stringify(results.get(scenario.id)._lastResponse, null, 2) }}</pre>
-                </div>
-              </div>
-            </template>
+            <div class="text-[11px] text-gray-500 mb-1">
+              Triggered reasons
+            </div>
+            <ReasonTags :reasons="getScenarioResult(scenario.id)!.response!.reasons" />
           </div>
 
-          <!-- Actions -->
-          <div class="flex gap-2 mt-auto">
-            <button
-              @click="submitScenario(scenario.id, scenario.payload)"
-              class="btn-primary text-xs flex-1 inline-flex items-center justify-center gap-1.5"
-              :disabled="submittingIds.has(scenario.id)"
-            >
-              <template v-if="submittingIds.has(scenario.id)">
-                <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-              </template>
-              <template v-else>
-                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-              </template>
-              {{ scenario.burstCount ? `Send ${scenario.burstCount}×` : 'Submit' }}
-            </button>
-            <button
-              @click="autoSubmit(scenario.id, scenario.payload)"
-              class="btn-outline text-xs"
-              :disabled="submittingIds.has(scenario.id)"
-            >
-              10× Auto
-            </button>
-          </div>
+          <details class="mt-2">
+            <summary class="cursor-pointer text-blue-300">
+              Request payload
+            </summary>
+            <pre class="mt-1 p-2 rounded bg-gray-950 text-[10px] text-gray-300 overflow-x-auto">{{ formatJson(getScenarioResult(scenario.id)!.request) }}</pre>
+          </details>
+
+          <details
+            v-if="getScenarioResult(scenario.id)?.response"
+            class="mt-2"
+          >
+            <summary class="cursor-pointer text-blue-300">
+              Response payload
+            </summary>
+            <pre class="mt-1 p-2 rounded bg-gray-950 text-[10px] text-gray-300 overflow-x-auto">{{ formatJson(getScenarioResult(scenario.id)!.response) }}</pre>
+          </details>
+
+          <details
+            v-if="getScenarioResult(scenario.id)?.steps?.length"
+            class="mt-2"
+          >
+            <summary class="cursor-pointer text-blue-300">
+              Burst steps ({{ getScenarioResult(scenario.id)?.steps?.length }})
+            </summary>
+            <pre class="mt-1 p-2 rounded bg-gray-950 text-[10px] text-gray-300 overflow-x-auto">{{ formatJson(getScenarioResult(scenario.id)?.steps) }}</pre>
+          </details>
         </div>
       </div>
     </div>
   </div>
-
-  <!-- Transaction Detail Modal -->
-  <TransactionDetailModal :transaction="selectedTransaction" @close="selectedTransaction = null" />
 </template>

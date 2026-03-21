@@ -27,11 +27,32 @@ const NEO4J_URI = process.env.NEO4J_URI || 'bolt://localhost:7687';
 const NEO4J_USER = process.env.NEO4J_USER || 'neo4j';
 const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD || 'password';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const ANALYZE_MAX_CONCURRENT = Number(process.env.ANALYZE_MAX_CONCURRENT || 2);
+const ANALYZE_QUEUE_TIMEOUT_MS = Number(process.env.ANALYZE_QUEUE_TIMEOUT_MS || 3000);
+const FRAUD_API_TIMEOUT_MS = Number(process.env.FRAUD_API_TIMEOUT_MS || 8000);
+const FRAUD_API_CIRCUIT_OPEN_MS = Number(process.env.FRAUD_API_CIRCUIT_OPEN_MS || 15000);
 
 // Middleware
 app.use(cors());
 app.use(morgan('short'));
 app.use(express.json());
+
+let analyzeInFlight = 0;
+let fraudApiCircuitOpenUntil = 0;
+
+async function acquireAnalyzeSlot(timeoutMs = ANALYZE_QUEUE_TIMEOUT_MS) {
+  const start = Date.now();
+  while (analyzeInFlight >= ANALYZE_MAX_CONCURRENT) {
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  analyzeInFlight += 1;
+  return true;
+}
+
+function releaseAnalyzeSlot() {
+  analyzeInFlight = Math.max(0, analyzeInFlight - 1);
+}
 
 async function persistAnalyzedTransaction(requestPayload, responsePayload) {
   if (!neo4jDriver) return;
@@ -124,26 +145,64 @@ app.get('/api/health', (req, res) => {
 
 // ------- Proxy: Analyze Transaction -------
 app.post('/api/analyze', async (req, res) => {
+  const acquired = await acquireAnalyzeSlot();
+  if (!acquired) {
+    return res.status(429).json({
+      error: 'analyze_queue_saturated',
+      details: 'Too many concurrent analyze requests. Please retry shortly.',
+    });
+  }
+
+  if (Date.now() < fraudApiCircuitOpenUntil) {
+    releaseAnalyzeSlot();
+    return res.status(503).json({
+      error: 'fraud_api_temporarily_unavailable',
+      details: 'Circuit breaker is open due to recent upstream failures. Retry in a few seconds.',
+    });
+  }
+
   try {
     const response = await axios.post(`${FRAUD_API_URL}/api/v1/transactions/analyze`, req.body, {
-      timeout: 10000,
+      timeout: FRAUD_API_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
     });
+
+    // Healthy upstream call: close any previously opened circuit.
+    fraudApiCircuitOpenUntil = 0;
 
     await persistAnalyzedTransaction(req.body, response.data);
 
     res.json(response.data);
   } catch (err) {
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
+      fraudApiCircuitOpenUntil = Date.now() + FRAUD_API_CIRCUIT_OPEN_MS;
       return res.status(503).json({
         error: 'Fraud Detection API is unavailable',
         details: `Cannot reach ${FRAUD_API_URL}`,
       });
     }
+    if (err.code === 'ECONNABORTED') {
+      fraudApiCircuitOpenUntil = Date.now() + FRAUD_API_CIRCUIT_OPEN_MS;
+      return res.status(504).json({
+        error: 'fraud_api_timeout',
+        details: `No response from ${FRAUD_API_URL} within ${FRAUD_API_TIMEOUT_MS}ms`,
+      });
+    }
+
+    if ((err.response?.status || 0) >= 500) {
+      fraudApiCircuitOpenUntil = Date.now() + FRAUD_API_CIRCUIT_OPEN_MS;
+      return res.status(502).json({
+        error: 'fraud_api_upstream_error',
+        details: `Upstream responded with status ${err.response?.status}`,
+      });
+    }
+
     const status = err.response?.status || 500;
     res.status(status).json({
       error: err.response?.data || err.message,
     });
+  } finally {
+    releaseAnalyzeSlot();
   }
 });
 

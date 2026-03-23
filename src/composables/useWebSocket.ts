@@ -48,14 +48,19 @@ export function useWebSocket() {
     })
 
     socket.on('transaction', (tx: any) => {
-      const record: TransactionRecord = {
-        id: tx.transaction_id || tx.response?.transaction_id || crypto.randomUUID(),
-        request: tx.request,
-        response: normalizeTransactionResponse(tx.response, tx.request),
-        submittedAt: new Date().toISOString(),
+      try {
+        const normalizedResponse = normalizeTransactionResponse(tx.response)
+        const record: TransactionRecord = {
+          id: normalizedResponse.transaction_id,
+          request: tx.request,
+          response: normalizedResponse,
+          submittedAt: new Date().toISOString(),
+        }
+        streamStore.addTransaction(record)
+        historyStore.addTransaction(record)
+      } catch (err: any) {
+        error.value = err?.message || 'Invalid transaction response received from API'
       }
-      streamStore.addTransaction(record)
-      historyStore.addTransaction(record)
     })
 
     socket.on('status', (status: { playing: boolean; speed: number }) => {

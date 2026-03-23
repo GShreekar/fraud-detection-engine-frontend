@@ -36,6 +36,10 @@ services:
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-password}
       REDIS_URL: redis://redis:6379
+      ANALYZE_MAX_CONCURRENT: ${ANALYZE_MAX_CONCURRENT:-4}
+      ANALYZE_QUEUE_TIMEOUT_MS: ${ANALYZE_QUEUE_TIMEOUT_MS:-20000}
+      FRAUD_API_TIMEOUT_MS: ${FRAUD_API_TIMEOUT_MS:-8000}
+      FRAUD_API_CIRCUIT_OPEN_MS: ${FRAUD_API_CIRCUIT_OPEN_MS:-15000}
       CORS_ORIGIN: "*"
     depends_on:
       redis:
@@ -46,9 +50,10 @@ services:
     networks:
       - fraud-net
 
-  # ─── Fraud Detection API (Docker Hub — standalone only) ───────────
+  # ─── Fraud Detection API ──────────────────────────────────────────
   fraud-api:
     image: ${FRAUD_API_IMAGE:-gshreekar/fraud-detection-engine:latest}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --timeout-keep-alive 5
     ports:
       - "8000:8000"
     environment:
@@ -56,16 +61,26 @@ services:
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-password}
       REDIS_URL: redis://redis:6379
+      # Tuned to fail fast under transient Neo4j instability instead of hanging API workers.
+      NEO4J_CONNECTION_POOL_SIZE: "20"
+      NEO4J_CONNECTION_ACQUIRE_TIMEOUT: "5000"
+      NEO4J_SOCKET_KEEP_ALIVE: "true"
+      NEO4J_SESSION_POOL_SIZE: "20"
+      NEO4J_MAX_TX_RETRY_TIME: "5000"
     depends_on:
       neo4j:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
-    profiles:
-      - standalone
     networks:
       - fraud-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s
+      timeout: 15s
+      retries: 8
+      start_period: 45s
 
   # ─── Neo4j ────────────────────────────────────────────────────────
   neo4j:
@@ -94,6 +109,8 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    # ✅ UPDATED: Increased memory from 256mb → 512mb to handle velocity spike scenario
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     healthcheck:
